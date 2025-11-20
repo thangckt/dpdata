@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import unittest
 
 import numpy as np
@@ -25,7 +27,7 @@ class TestPBC(unittest.TestCase):
                     self.assertAlmostEqual(
                         sys["coords"][ii][jj][dd],
                         bk_coord[ii][jj][dd],
-                        msg="coord[%d][%d][%d] failed" % (ii, jj, dd),
+                        msg="coord[%d][%d][%d] failed" % (ii, jj, dd),  # noqa: UP031
                     )
 
 

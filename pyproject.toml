@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61", "setuptools_scm[toml]>=6.2"]
+requires = ["setuptools>=61", "setuptools_scm[toml]>=7"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,7 +12,6 @@ authors = [
 ]
 license = {file = "LICENSE"}
 classifiers = [
-    "Programming Language :: Python :: 3.7",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -26,8 +25,9 @@ dependencies = [
     'h5py',
     'wcmatch',
     'importlib_metadata>=1.4; python_version < "3.8"',
+    'typing_extensions; python_version < "3.8"',
 ]
-requires-python = ">=3.7"
+requires-python = ">=3.8"
 readme = "README.md"
 keywords = ["lammps", "vasp", "deepmd-kit"]
 
@@ -36,10 +36,12 @@ Homepage = "https://github.com/deepmodeling/dpdata"
 documentation = "https://docs.deepmodeling.com/projects/dpdata"
 repository = "https://github.com/deepmodeling/dpdata"
 
-[project.entry-points.console_scripts]
+[project.scripts]
 dpdata = "dpdata.cli:dpdata_cli"
 
 [project.optional-dependencies]
+test = [
+]
 ase = ['ase']
 amber = [
     'parmed; python_version >= "3.8"',
@@ -49,14 +51,18 @@ pymatgen = ['pymatgen']
 docs = [
     'sphinx',
     'recommonmark',
-    'sphinx_rtd_theme>=1.0.0rc1',
+    'sphinx-book-theme',
     'numpydoc',
-    'm2r2',
-    'deepmodeling-sphinx>=0.1.1',
-    'sphinx-argparse',
+    'myst-parser',
+    'deepmodeling-sphinx>=0.3.0',
+    'sphinx-argparse<0.5.0',
     'rdkit',
     'jupyterlite-sphinx',
-    'jupyterlite-xeus-python',
+    'jupyterlite-xeus',
+]
+benchmark = [
+    'pytest',
+    'pytest-codspeed',
 ]
 
 [tool.setuptools.packages.find]
@@ -78,6 +84,8 @@ select = [
     "D", # pydocstyle
     "UP", # pyupgrade
     "I", # isort
+    "TID253", # banned-module-level-imports
+    "TCH", # flake8-type-checking
 ]
 ignore = [
     "E501", # line too long
@@ -103,3 +111,25 @@ ignore-init-module-imports = true
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
+
+[tool.ruff.lint.flake8-tidy-imports]
+banned-module-level-imports = [
+    "pymatgen",
+    "ase",
+    "openbabel",
+    "rdkit",
+    "parmed",
+    "deepmd",
+    "h5py",
+    "wcmatch",
+    "monty",
+    "scipy",
+]
+
+[tool.ruff.lint.isort]
+required-imports = ["from __future__ import annotations"]
+
+[tool.pyright]
+include = [
+    "dpdata/*.py",
+]

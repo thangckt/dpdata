@@ -3,27 +3,19 @@
 # under LGPL 3.0 license
 """Generate Gaussian input file."""
 
+from __future__ import annotations
+
 import itertools
 import re
 import uuid
 import warnings
-from typing import List, Optional, Tuple, Union
 
 import numpy as np
-from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import connected_components
 
-try:
-    from openbabel import openbabel
-except ImportError:
-    try:
-        import openbabel
-    except ImportError:
-        openbabel = None
 from dpdata.periodic_table import Element
 
 
-def _crd2frag(symbols: List[str], crds: np.ndarray) -> Tuple[int, List[int]]:
+def _crd2frag(symbols: list[str], crds: np.ndarray) -> tuple[int, list[int]]:
     """Detect fragments from coordinates.
 
     Parameters
@@ -53,10 +45,13 @@ def _crd2frag(symbols: List[str], crds: np.ndarray) -> Tuple[int, List[int]]:
     ImportError
         if Open Babel is not installed
     """
-    if openbabel is None:
-        raise ImportError(
-            "Open Babel (Python interface) should be installed to detect fragmentation!"
-        )
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    try:
+        from openbabel import openbabel
+    except ImportError:
+        import openbabel
     atomnumber = len(symbols)
     # Use openbabel to connect atoms
     mol = openbabel.OBMol()
@@ -108,12 +103,12 @@ def detect_multiplicity(symbols: np.ndarray) -> int:
 
 def make_gaussian_input(
     sys_data: dict,
-    keywords: Union[str, List[str]],
-    multiplicity: Union[str, int] = "auto",
+    keywords: str | list[str],
+    multiplicity: str | int = "auto",
     charge: int = 0,
     fragment_guesses: bool = False,
-    basis_set: Optional[str] = None,
-    keywords_high_multiplicity: Optional[str] = None,
+    basis_set: str | None = None,
+    keywords_high_multiplicity: str | None = None,
     nproc: int = 1,
 ) -> str:
     """Make gaussian input file.
@@ -191,8 +186,8 @@ def make_gaussian_input(
             mult_frags.append(detect_multiplicity(np.array(symbols)[idx]))
         if use_fragment_guesses:
             multiplicity = sum(mult_frags) - frag_numb + 1 - charge % 2
-            chargekeywords_frag = "%d %d" % (charge, multiplicity) + "".join(
-                [" %d %d" % (charge, mult_frag) for mult_frag in mult_frags]
+            chargekeywords_frag = "%d %d" % (charge, multiplicity) + "".join(  # noqa: UP031
+                [" %d %d" % (charge, mult_frag) for mult_frag in mult_frags]  # noqa: UP031
             )
         else:
             multi_frags = np.array(mult_frags)
@@ -244,10 +239,10 @@ def make_gaussian_input(
     for ii, (symbol, coordinate) in enumerate(zip(symbols, coordinates)):
         if use_fragment_guesses:
             buff.append(
-                "%s(Fragment=%d) %f %f %f" % (symbol, frag_index[ii] + 1, *coordinate)
+                "%s(Fragment=%d) %f %f %f" % (symbol, frag_index[ii] + 1, *coordinate)  # noqa: UP031
             )
         else:
-            buff.append("{} {:f} {:f} {:f}".format(symbol, *coordinate))
+            buff.append("{} {:f} {:f} {:f}".format(symbol, *coordinate))  # noqa: UP031
     if not sys_data.get("nopbc", False):
         # PBC condition
         cell = sys_data["cells"][0]

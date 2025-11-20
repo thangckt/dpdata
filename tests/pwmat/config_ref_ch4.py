@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 
 
@@ -33,7 +35,7 @@ class Testconfigch4:
                     self.system.data["cells"][0][ii][jj],
                     ovito_cell[ii][jj],
                     places=6,
-                    msg="cell[%d][%d] failed" % (ii, jj),
+                    msg="cell[%d][%d] failed" % (ii, jj),  # noqa: UP031
                 )
 
     def test_frame(self):
@@ -55,5 +57,5 @@ class Testconfigch4:
                     self.system.data["coords"][0][ii][jj],
                     ovito_posis[ii][jj],
                     places=6,
-                    msg="posis[%d][%d] failed" % (ii, jj),
+                    msg="posis[%d][%d] failed" % (ii, jj),  # noqa: UP031
                 )

@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
 
-try:
-    import h5py
-except ImportError:
-    pass
 import numpy as np
 
 import dpdata
@@ -13,14 +10,41 @@ import dpdata.deepmd.comp
 import dpdata.deepmd.hdf5
 import dpdata.deepmd.mixed
 import dpdata.deepmd.raw
+from dpdata.data_type import Axis, DataType
 from dpdata.driver import Driver
 from dpdata.format import Format
+
+if TYPE_CHECKING:
+    import h5py
+
+
+def register_spin():
+    dt = DataType(
+        "spins",
+        np.ndarray,
+        (Axis.NFRAMES, Axis.NATOMS, 3),
+        required=False,
+        deepmd_name="spin",
+    )
+    dpdata.System.register_data_type(dt)
+    dpdata.LabeledSystem.register_data_type(dt)
+
+    dt = DataType(
+        "force_mags",
+        np.ndarray,
+        (Axis.NFRAMES, Axis.NATOMS, 3),
+        required=False,
+        deepmd_name="force_mag",
+    )
+    dpdata.System.register_data_type(dt)
+    dpdata.LabeledSystem.register_data_type(dt)
 
 
 @Format.register("deepmd")
 @Format.register("deepmd/raw")
 class DeePMDRawFormat(Format):
     def from_system(self, file_name, type_map=None, **kwargs):
+        register_spin()
         return dpdata.deepmd.raw.to_system_data(
             file_name, type_map=type_map, labels=False
         )
@@ -30,6 +54,7 @@ class DeePMDRawFormat(Format):
         dpdata.deepmd.raw.dump(file_name, data)
 
     def from_labeled_system(self, file_name, type_map=None, **kwargs):
+        register_spin()
         return dpdata.deepmd.raw.to_system_data(
             file_name, type_map=type_map, labels=True
         )
@@ -41,6 +66,7 @@ class DeePMDRawFormat(Format):
 @Format.register("deepmd/comp")
 class DeePMDCompFormat(Format):
     def from_system(self, file_name, type_map=None, **kwargs):
+        register_spin()
         return dpdata.deepmd.comp.to_system_data(
             file_name, type_map=type_map, labels=False
         )
@@ -69,6 +95,7 @@ class DeePMDCompFormat(Format):
         dpdata.deepmd.comp.dump(file_name, data, set_size=set_size, comp_prec=prec)
 
     def from_labeled_system(self, file_name, type_map=None, **kwargs):
+        register_spin()
         return dpdata.deepmd.comp.to_system_data(
             file_name, type_map=type_map, labels=True
         )
@@ -149,6 +176,7 @@ class DeePMDMixedFormat(Format):
         return dpdata.deepmd.mixed.mix_system(*system, type_map=type_map, **kwargs)
 
     def from_multi_systems(self, directory, **kwargs):
+        register_spin()
         sys_dir = []
         for root, dirs, files in os.walk(directory):
             if (
@@ -202,6 +230,10 @@ class DeePMDHDF5Format(Format):
         TypeError
             file_name is not str or h5py.Group or h5py.File
         """
+        import h5py
+
+        register_spin()
+
         if isinstance(file_name, (h5py.Group, h5py.File)):
             return dpdata.deepmd.hdf5.to_system_data(
                 file_name, "", type_map=type_map, labels=labels
@@ -300,6 +332,8 @@ class DeePMDHDF5Format(Format):
         **kwargs : dict
             other parameters
         """
+        import h5py
+
         if isinstance(file_name, (h5py.Group, h5py.File)):
             dpdata.deepmd.hdf5.dump(
                 file_name, "", data, set_size=set_size, comp_prec=comp_prec
@@ -330,6 +364,8 @@ class DeePMDHDF5Format(Format):
         h5py.Group
             a HDF5 group in the HDF5 file
         """
+        import h5py
+
         with h5py.File(directory, "r") as f:
             for ff in f.keys():
                 yield f[ff]
@@ -353,6 +389,8 @@ class DeePMDHDF5Format(Format):
         h5py.Group
             a HDF5 group with the name of formula
         """
+        import h5py
+
         with h5py.File(directory, "w") as f:
             for ff in formulas:
                 yield f.create_group(ff)

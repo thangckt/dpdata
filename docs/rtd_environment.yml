@@ -1,6 +1,8 @@
 name: dpdata
 channels:
-  - https://repo.mamba.pm/conda-forge
+  - conda-forge
 dependencies:
+  - python <3.13
+  - jupyterlite-xeus
   - pip:
     - ..[docs]

@@ -1,79 +1,25 @@
+from __future__ import annotations
+
 import os
 import re
 import warnings
 
 import numpy as np
 
-from ..unit import EnergyConversion, LengthConversion, PressureConversion
+from dpdata.utils import open_file
+
+from ..unit import LengthConversion, PressureConversion
+from .stru import get_frame_from_stru
 
 bohr2ang = LengthConversion("bohr", "angstrom").value()
-ry2ev = EnergyConversion("rydberg", "eV").value()
 kbar2evperang3 = PressureConversion("kbar", "eV/angstrom^3").value()
-
-ABACUS_STRU_KEYS = [
-    "ATOMIC_SPECIES",
-    "NUMERICAL_ORBITAL",
-    "LATTICE_CONSTANT",
-    "LATTICE_VECTORS",
-    "ATOMIC_POSITIONS",
-    "NUMERICAL_DESCRIPTOR",
-    "PAW_FILES",
-]
 
 
 def CheckFile(ifile):
     if not os.path.isfile(ifile):
-        print("Can not find file %s" % ifile)
+        print(f"Can not find file {ifile}")
         return False
     return True
-
-
-def get_block(lines, keyword, skip=0, nlines=None):
-    ret = []
-    found = False
-    if not nlines:
-        nlines = 1e6
-    for idx, ii in enumerate(lines):
-        if keyword in ii:
-            found = True
-            blk_idx = idx + 1 + skip
-            line_idx = 0
-            while len(re.split("\s+", lines[blk_idx])) == 0:
-                blk_idx += 1
-            while line_idx < nlines and blk_idx != len(lines):
-                if len(re.split("\s+", lines[blk_idx])) == 0 or lines[blk_idx] == "":
-                    blk_idx += 1
-                    continue
-                ret.append(lines[blk_idx])
-                blk_idx += 1
-                line_idx += 1
-            break
-    if not found:
-        return None
-    return ret
-
-
-def get_stru_block(lines, keyword):
-    # return the block of lines after keyword in STRU file, and skip the blank lines
-
-    def clean_comment(line):
-        return re.split("[#]", line)[0]
-
-    ret = []
-    found = False
-    for i in range(len(lines)):
-        if clean_comment(lines[i]).strip() == keyword:
-            found = True
-            for j in range(i + 1, len(lines)):
-                if clean_comment(lines[j]).strip() == "":
-                    continue
-                elif clean_comment(lines[j]).strip() in ABACUS_STRU_KEYS:
-                    break
-                else:
-                    ret.append(clean_comment(lines[j]))
-    if not found:
-        return None
-    return ret
 
 
 def get_geometry_in(fname, inlines):
@@ -91,62 +37,18 @@ def get_path_out(fname, inlines):
     for line in inlines:
         if "suffix" in line and "suffix" == line.split()[0]:
             suffix = line.split()[1]
-            path_out = os.path.join(fname, "OUT.%s/running_scf.log" % suffix)
+            path_out = os.path.join(fname, f"OUT.{suffix}/running_scf.log")
             break
     return path_out
-
-
-def get_cell(geometry_inlines):
-    cell_lines = get_stru_block(geometry_inlines, "LATTICE_VECTORS")
-    celldm_lines = get_stru_block(geometry_inlines, "LATTICE_CONSTANT")
-
-    celldm = float(celldm_lines[0].split()[0]) * bohr2ang  # lattice const is in Bohr
-    cell = []
-    for ii in range(3):
-        cell.append([float(jj) for jj in cell_lines[ii].split()[0:3]])
-    cell = celldm * np.array(cell)
-    return celldm, cell
-
-
-def get_coords(celldm, cell, geometry_inlines, inlines=None):
-    coords_lines = get_stru_block(geometry_inlines, "ATOMIC_POSITIONS")
-    # assuming that ATOMIC_POSITIONS is at the bottom of the STRU file
-    coord_type = coords_lines[0].split()[0].lower()  # cartisan or direct
-    atom_names = []  # element abbr in periodic table
-    atom_types = []  # index of atom_names of each atom in the geometry
-    atom_numbs = []  # of atoms for each element
-    coords = []  # coordinations of atoms
-    ntype = get_nele_from_stru(geometry_inlines)
-    line_idx = 1  # starting line of first element
-    for it in range(ntype):
-        atom_names.append(coords_lines[line_idx].split()[0])
-        line_idx += 2
-        atom_numbs.append(int(coords_lines[line_idx].split()[0]))
-        line_idx += 1
-        for iline in range(atom_numbs[it]):
-            xyz = np.array([float(xx) for xx in coords_lines[line_idx].split()[0:3]])
-            if coord_type == "cartesian":
-                xyz = xyz * celldm
-            elif coord_type == "direct":
-                tmp = np.matmul(xyz, cell)
-                xyz = tmp
-            else:
-                print("coord_type = %s" % coord_type)
-                raise RuntimeError(
-                    "Input coordination type is invalid.\n Only direct and cartesian are accepted."
-                )
-            coords.append(xyz)
-            atom_types.append(it)
-            line_idx += 1
-    coords = np.array(coords)  # need transformation!!!
-    atom_types = np.array(atom_types)
-    return atom_names, atom_numbs, atom_types, coords
 
 
 def get_energy(outlines):
     Etot = None
     for line in reversed(outlines):
-        if "final etot is" in line:
+        if "final etot is" in line:  # for LTS
+            Etot = float(line.split()[-2])  # in eV
+            return Etot, True
+        elif "TOTAL ENERGY" in line:  # for develop
             Etot = float(line.split()[-2])  # in eV
             return Etot, True
         elif "convergence has NOT been achieved!" in line:
@@ -160,7 +62,8 @@ def get_energy(outlines):
 def collect_force(outlines):
     force = []
     for i, line in enumerate(outlines):
-        if "TOTAL-FORCE (eV/Angstrom)" in line:
+        # if "TOTAL-FORCE (eV/Angstrom)" in line:
+        if "TOTAL-FORCE" in line:
             value_pattern = re.compile(
                 r"^\s*[A-Z][a-z]?[1-9][0-9]*\s+[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?\s+[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?\s+[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?\s*$"
             )
@@ -188,7 +91,7 @@ def collect_force(outlines):
 def get_force(outlines, natoms):
     force = collect_force(outlines)
     if len(force) == 0:
-        return [[]]
+        return None
     else:
         return np.array(force[-1])  # only return the last force
 
@@ -196,7 +99,8 @@ def get_force(outlines, natoms):
 def collect_stress(outlines):
     stress = []
     for i, line in enumerate(outlines):
-        if "TOTAL-STRESS (KBAR)" in line:
+        # if "TOTAL-STRESS (KBAR)" in line:
+        if "TOTAL-STRESS" in line:
             value_pattern = re.compile(
                 r"^\s*[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?\s+[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?\s+[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?\s*$"
             )
@@ -230,15 +134,63 @@ def get_stress(outlines):
         return np.array(stress[-1]) * kbar2evperang3  # only return the last stress
 
 
+def get_mag_force(outlines):
+    """Read atomic magmom and magnetic force from OUT.ABACUS/running_scf.log.
+
+    Returns
+    -------
+    magmom: list of list of atomic magnetic moments (three dimensions: ION_STEP * NATOMS * 1/3)
+    magforce: list of list of atomic magnetic forces (three dimensions: ION_STEP * NATOMS * 1/3)
+    e.g.:
+    -------------------------------------------------------------------------------------------
+    Total Magnetism (uB)
+    -------------------------------------------------------------------------------------------
+        Fe         0.0000000001         0.0000000000         3.0000000307
+        Fe        -0.0000000000        -0.0000000000         3.0000001151
+    -------------------------------------------------------------------------------------------
+    -------------------------------------------------------------------------------------------
+    Magnetic force (eV/uB)
+    -------------------------------------------------------------------------------------------
+        Fe         0.0000000000         0.0000000000        -1.2117698671
+        Fe         0.0000000000         0.0000000000        -1.2117928796
+    -------------------------------------------------------------------------------------------
+
+    """
+    mags = []
+    magforces = []
+    for i, line in enumerate(outlines):
+        if "Total Magnetism (uB)" in line:
+            j = i + 2
+            mag = []
+            while "-------------------------" not in outlines[j]:
+                imag = [float(ii) for ii in outlines[j].split()[1:]]
+                if len(imag) == 1:
+                    imag = [0, 0, imag[0]]
+                mag.append(imag)
+                j += 1
+            mags.append(mag)
+        if "Magnetic force (eV/uB)" in line:
+            j = i + 2
+            magforce = []
+            while "-------------------------" not in outlines[j]:
+                imagforce = [float(ii) for ii in outlines[j].split()[1:]]
+                if len(imagforce) == 1:
+                    imagforce = [0, 0, imagforce[0]]
+                magforce.append(imagforce)
+                j += 1
+            magforces.append(magforce)
+    return np.array(mags), np.array(magforces)
+
+
 def get_frame(fname):
     data = {
         "atom_names": [],
         "atom_numbs": [],
         "atom_types": [],
-        "cells": [],
-        "coords": [],
-        "energies": [],
-        "forces": [],
+        "cells": np.array([]),
+        "coords": np.array([]),
+        "energies": np.array([]),
+        "forces": np.array([]),
     }
 
     if isinstance(fname, str):
@@ -251,176 +203,53 @@ def get_frame(fname):
     if not CheckFile(path_in):
         return data
 
-    with open(path_in) as fp:
+    with open_file(path_in) as fp:
         inlines = fp.read().split("\n")
 
     geometry_path_in = get_geometry_in(fname, inlines)
+
+    # get OUT.ABACUS/running_scf.log
     path_out = get_path_out(fname, inlines)
     if not (CheckFile(geometry_path_in) and CheckFile(path_out)):
         return data
-
-    with open(geometry_path_in) as fp:
-        geometry_inlines = fp.read().split("\n")
-    with open(path_out) as fp:
+    with open_file(path_out) as fp:
         outlines = fp.read().split("\n")
 
-    celldm, cell = get_cell(geometry_inlines)
-    atom_names, natoms, types, coords = get_coords(
-        celldm, cell, geometry_inlines, inlines
-    )
-    data["atom_names"] = atom_names
-    data["atom_numbs"] = natoms
-    data["atom_types"] = types
-
+    # get energy
     energy, converge = get_energy(outlines)
     if not converge:
         return data
+
+    # read STRU file
+    data = get_frame_from_stru(geometry_path_in)
+    natoms = sum(data["atom_numbs"])
+    # should remove spins from STRU file
+    if "spins" in data:
+        data.pop("spins")
+    move = data.pop("move", None)
+
+    # get magmom and magforce, force and stress
+    magmom, magforce = get_mag_force(outlines)
+    if len(magmom) > 0:
+        magmom = magmom[-1:]
+    if len(magforce) > 0:
+        magforce = magforce[-1:]
+
     force = get_force(outlines, natoms)
     stress = get_stress(outlines)
-    if stress is not None:
-        stress *= np.abs(np.linalg.det(cell))
 
-    data["cells"] = cell[np.newaxis, :, :]
-    data["coords"] = coords[np.newaxis, :, :]
     data["energies"] = np.array(energy)[np.newaxis]
-    data["forces"] = force[np.newaxis, :, :]
+    data["forces"] = np.empty((0,)) if force is None else force[np.newaxis, :, :]
+    data["orig"] = np.zeros(3)
     if stress is not None:
+        cell = data["cells"][0]
+        stress *= np.abs(np.linalg.det(cell))
         data["virials"] = stress[np.newaxis, :, :]
-    data["orig"] = np.zeros(3)
-    # print("atom_names = ", data['atom_names'])
-    # print("natoms = ", data['atom_numbs'])
-    # print("types = ", data['atom_types'])
-    # print("cells = ", data['cells'])
-    # print("coords = ", data['coords'])
-    # print("energy = ", data['energies'])
-    # print("force = ", data['forces'])
-    # print("virial = ", data['virials'])
+
+    if len(magmom) > 0:
+        data["spins"] = magmom
+    if len(magforce) > 0:
+        data["force_mags"] = magforce
+    if move is not None:
+        data["move"] = move
     return data
-
-
-def get_nele_from_stru(geometry_inlines):
-    key_words_list = [
-        "ATOMIC_SPECIES",
-        "NUMERICAL_ORBITAL",
-        "LATTICE_CONSTANT",
-        "LATTICE_VECTORS",
-        "ATOMIC_POSITIONS",
-        "NUMERICAL_DESCRIPTOR",
-    ]
-    keyword_sequence = []
-    keyword_line_index = []
-    atom_names = []
-    atom_numbs = []
-    for iline, line in enumerate(geometry_inlines):
-        if line.split() == []:
-            continue
-        have_key_word = False
-        for keyword in key_words_list:
-            if keyword in line and keyword == line.split()[0]:
-                keyword_sequence.append(keyword)
-                keyword_line_index.append(iline)
-    assert len(keyword_line_index) == len(keyword_sequence)
-    assert len(keyword_sequence) > 0
-    keyword_line_index.append(len(geometry_inlines))
-
-    nele = 0
-    for idx, keyword in enumerate(keyword_sequence):
-        if keyword == "ATOMIC_SPECIES":
-            for iline in range(
-                keyword_line_index[idx] + 1, keyword_line_index[idx + 1]
-            ):
-                if len(re.split("\s+", geometry_inlines[iline])) >= 3:
-                    nele += 1
-    return nele
-
-
-def get_frame_from_stru(fname):
-    assert isinstance(fname, str)
-    with open(fname) as fp:
-        geometry_inlines = fp.read().split("\n")
-    nele = get_nele_from_stru(geometry_inlines)
-    inlines = ["ntype %d" % nele]
-    celldm, cell = get_cell(geometry_inlines)
-    atom_names, natoms, types, coords = get_coords(
-        celldm, cell, geometry_inlines, inlines
-    )
-    data = {}
-    data["atom_names"] = atom_names
-    data["atom_numbs"] = natoms
-    data["atom_types"] = types
-    data["cells"] = cell[np.newaxis, :, :]
-    data["coords"] = coords[np.newaxis, :, :]
-    data["orig"] = np.zeros(3)
-
-    return data
-
-
-def make_unlabeled_stru(
-    data,
-    frame_idx,
-    pp_file=None,
-    numerical_orbital=None,
-    numerical_descriptor=None,
-    mass=None,
-):
-    out = "ATOMIC_SPECIES\n"
-    for iele in range(len(data["atom_names"])):
-        out += data["atom_names"][iele] + " "
-        if mass is not None:
-            out += "%.3f " % mass[iele]
-        else:
-            out += "1 "
-        if pp_file is not None:
-            out += "%s\n" % pp_file[iele]
-        else:
-            out += "\n"
-    out += "\n"
-
-    if numerical_orbital is not None:
-        assert len(numerical_orbital) == len(data["atom_names"])
-        out += "NUMERICAL_ORBITAL\n"
-        for iele in range(len(numerical_orbital)):
-            out += "%s\n" % numerical_orbital[iele]
-        out += "\n"
-
-    if numerical_descriptor is not None:
-        assert isinstance(numerical_descriptor, str)
-        out += "NUMERICAL_DESCRIPTOR\n%s\n" % numerical_descriptor
-        out += "\n"
-
-    out += "LATTICE_CONSTANT\n"
-    out += str(1 / bohr2ang) + "\n\n"
-
-    out += "LATTICE_VECTORS\n"
-    for ix in range(3):
-        for iy in range(3):
-            out += str(data["cells"][frame_idx][ix][iy]) + " "
-        out += "\n"
-    out += "\n"
-
-    out += "ATOMIC_POSITIONS\n"
-    out += "Cartesian    # Cartesian(Unit is LATTICE_CONSTANT)\n"
-    # ret += "\n"
-    natom_tot = 0
-    for iele in range(len(data["atom_names"])):
-        out += data["atom_names"][iele] + "\n"
-        out += "0.0\n"
-        out += str(data["atom_numbs"][iele]) + "\n"
-        for iatom in range(data["atom_numbs"][iele]):
-            iatomtype = np.nonzero(data["atom_types"] == iele)[0][iatom]
-            out += "%.12f %.12f %.12f %d %d %d\n" % (
-                data["coords"][frame_idx][iatomtype, 0],
-                data["coords"][frame_idx][iatomtype, 1],
-                data["coords"][frame_idx][iatomtype, 2],
-                1,
-                1,
-                1,
-            )
-            natom_tot += 1
-    assert natom_tot == sum(data["atom_numbs"])
-    return out
-
-
-# if __name__ == "__main__":
-#    path = "/home/lrx/work/12_ABACUS_dpgen_interface/dpdata/dpdata/tests/abacus.scf"
-#    data = get_frame(path)

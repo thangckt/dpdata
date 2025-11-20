@@ -1,16 +1,20 @@
+from __future__ import annotations
+
 import os
 
 import numpy as np
+
+from dpdata.utils import open_file
 
 from .scf import (
     bohr2ang,
     collect_force,
     collect_stress,
-    get_cell,
-    get_coords,
     get_geometry_in,
+    get_mag_force,
     kbar2evperang3,
 )
+from .stru import get_frame_from_stru
 
 # Read in geometries from an ABACUS RELAX(CELL-RELAX) trajectory in OUT.XXXX/runnning_relax/cell-relax.log.
 
@@ -42,7 +46,7 @@ def get_coords_from_log(loglines, natoms):
             natoms_log += int(line.split()[-1])
 
     assert natoms_log > 0 and natoms_log == natoms, (
-        "ERROR: detected atom number in log file is %d" % natoms
+        f"ERROR: detected atom number in log file is {natoms_log}, while the atom number in STRU file is {natoms}"
     )
 
     energy = []
@@ -71,7 +75,7 @@ def get_coords_from_log(loglines, natoms):
                         list(map(lambda x: float(x) * a0, loglines[i + k].split()[1:4]))
                     )
             else:
-                assert False, "Unrecongnized coordinate type, %s, line:%d" % (
+                assert False, "Unrecongnized coordinate type, %s, line:%d" % (  # noqa: UP031
                     loglines[i].split()[0],
                     i,
                 )
@@ -172,32 +176,25 @@ def get_frame(fname):
         path_in = os.path.join(fname, "INPUT")
     else:
         raise RuntimeError("invalid input")
-    with open(path_in) as fp:
+    with open_file(path_in) as fp:
         inlines = fp.read().split("\n")
     geometry_path_in = get_geometry_in(fname, inlines)  # base dir of STRU
-    with open(geometry_path_in) as fp:
-        geometry_inlines = fp.read().split("\n")
-    celldm, cell = get_cell(geometry_inlines)
-    atom_names, natoms, types, coord_tmp = get_coords(
-        celldm, cell, geometry_inlines, inlines
-    )
+
+    data = get_frame_from_stru(geometry_path_in)
+    natoms = sum(data["atom_numbs"])
+    # should remove spins from STRU file
+    if "spins" in data:
+        data.pop("spins")
 
     logf = get_log_file(fname, inlines)
-    assert os.path.isfile(logf), "Error: can not find %s" % logf
-    with open(logf) as f1:
+    assert os.path.isfile(logf), f"Error: can not find {logf}"
+    with open_file(logf) as f1:
         lines = f1.readlines()
 
-    atomnumber = 0
-    for i in natoms:
-        atomnumber += i
-    energy, cells, coords, force, stress, virial = get_coords_from_log(
-        lines, atomnumber
-    )
+    energy, cells, coords, force, stress, virial = get_coords_from_log(lines, natoms)
 
-    data = {}
-    data["atom_names"] = atom_names
-    data["atom_numbs"] = natoms
-    data["atom_types"] = types
+    magmom, magforce = get_mag_force(lines)
+
     data["cells"] = cells
     data["coords"] = coords
     data["energies"] = energy
@@ -206,5 +203,12 @@ def get_frame(fname):
         data["virials"] = virial
     data["stress"] = stress
     data["orig"] = np.zeros(3)
+
+    if len(magmom) > 0:
+        data["spins"] = magmom
+    if len(magforce) > 0:
+        data["force_mags"] = magforce
+    if "move" in data:
+        data["move"] = [data["move"][0] for i in range(len(data["energies"]))]
 
     return data

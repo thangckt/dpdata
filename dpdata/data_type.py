@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from enum import Enum, unique
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -44,22 +46,64 @@ class DataType:
         represents numbers
     required : bool, default=True
         whether this data is required
+    deepmd_name : str, optional
+        DeePMD-kit data type name. When not given, it is the same as `name`.
     """
 
     def __init__(
         self,
         name: str,
         dtype: type,
-        shape: Tuple[int, Axis] = None,
+        shape: tuple[int | Axis, ...] | None = None,
         required: bool = True,
+        deepmd_name: str | None = None,
     ) -> None:
         self.name = name
         self.dtype = dtype
         self.shape = shape
         self.required = required
+        self.deepmd_name = name if deepmd_name is None else deepmd_name
 
-    def real_shape(self, system: "System") -> Tuple[int]:
+    def __eq__(self, other) -> bool:
+        """Check if two DataType instances are equal.
+
+        Parameters
+        ----------
+        other : object
+            object to compare with
+
+        Returns
+        -------
+        bool
+            True if equal, False otherwise
+        """
+        if not isinstance(other, DataType):
+            return False
+        return (
+            self.name == other.name
+            and self.dtype == other.dtype
+            and self.shape == other.shape
+            and self.required == other.required
+            and self.deepmd_name == other.deepmd_name
+        )
+
+    def __repr__(self) -> str:
+        """Return string representation of DataType.
+
+        Returns
+        -------
+        str
+            string representation
+        """
+        return (
+            f"DataType(name='{self.name}', dtype={self.dtype.__name__}, "
+            f"shape={self.shape}, required={self.required}, "
+            f"deepmd_name='{self.deepmd_name}')"
+        )
+
+    def real_shape(self, system: System) -> tuple[int]:
         """Returns expected real shape of a system."""
+        assert self.shape is not None
         shape = []
         for ii in self.shape:
             if ii is Axis.NFRAMES:
@@ -70,7 +114,7 @@ class DataType:
                 shape.append(system.get_natoms())
             elif ii is Axis.NBONDS:
                 # BondOrderSystem
-                shape.append(system.get_nbonds())
+                shape.append(system.get_nbonds())  # type: ignore
             elif ii == -1:
                 shape.append(AnyInt(-1))
             elif isinstance(ii, int):
@@ -79,7 +123,7 @@ class DataType:
                 raise RuntimeError("Shape is not an int!")
         return tuple(shape)
 
-    def check(self, system: "System"):
+    def check(self, system: System):
         """Check if a system has correct data of this type.
 
         Parameters
@@ -115,13 +159,13 @@ class DataType:
                 elif isinstance(data, list):
                     if len(shape) and shape[0] != len(data):
                         raise DataError(
-                            "Length of %s is %d, but expected %d"
+                            "Length of %s is %d, but expected %d"  # noqa: UP031
                             % (self.name, len(data), shape[0])
                         )
                 else:
                     raise RuntimeError("Unsupported type to check shape")
         elif self.required:
-            raise DataError("%s not found in data" % self.name)
+            raise DataError(f"{self.name} not found in data")
 
 
 __system_data_type_plugin = Plugin()

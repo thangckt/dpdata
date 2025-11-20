@@ -1,7 +1,17 @@
 #!/usr/bin/python3
+from __future__ import annotations
+
 import warnings
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+from dpdata.utils import open_file
+
+if TYPE_CHECKING:
+    from dpdata.utils import FileType
+
+import os
 
 from ..unit import (
     EnergyConversion,
@@ -12,6 +22,7 @@ from ..unit import (
 
 ry2ev = EnergyConversion("rydberg", "eV").value()
 kbar2evperang3 = PressureConversion("kbar", "eV/angstrom^3").value()
+gpa2evperbohr = PressureConversion("GPa", "eV/bohr^3").value()
 
 length_convert = LengthConversion("bohr", "angstrom").value()
 energy_convert = EnergyConversion("hartree", "eV").value()
@@ -70,7 +81,7 @@ def load_atom_names(lines, ntypes):
 def load_celldm(lines):
     celldm = np.zeros(6)
     for ii in range(6):
-        key = "celldm(%d)" % (ii + 1)
+        key = "celldm(%d)" % (ii + 1)  # noqa: UP031
         val = load_key(lines, key)
         if val is not None:
             celldm[ii] = float(val)
@@ -85,8 +96,8 @@ def load_atom_types(lines, natoms, atom_names):
     return np.array(ret, dtype=int)
 
 
-def load_param_file(fname):
-    with open(fname) as fp:
+def load_param_file(fname: FileType):
+    with open_file(fname) as fp:
         lines = fp.read().split("\n")
     natoms = int(load_key(lines, "nat"))
     ntypes = int(load_key(lines, "ntyp"))
@@ -125,11 +136,11 @@ def _load_pos_block(fp, natoms):
         return blk, ss
 
 
-def load_data(fname, natoms, begin=0, step=1, convert=1.0):
+def load_data(fname: FileType, natoms, begin=0, step=1, convert=1.0):
     coords = []
     steps = []
     cc = 0
-    with open(fname) as fp:
+    with open_file(fname) as fp:
         while True:
             blk, ss = _load_pos_block(fp, natoms)
             if blk is None:
@@ -145,7 +156,7 @@ def load_data(fname, natoms, begin=0, step=1, convert=1.0):
 
 # def load_pos(fname, natoms) :
 #     coords = []
-#     with open(fname) as fp:
+#     with open_file(fname) as fp:
 #         while True:
 #             blk = _load_pos_block(fp, natoms)
 #             # print(blk)
@@ -158,11 +169,11 @@ def load_data(fname, natoms, begin=0, step=1, convert=1.0):
 
 
 def load_energy(fname, begin=0, step=1):
-    data = np.loadtxt(fname)
+    data = np.loadtxt(fname, ndmin=2)
     steps = []
     for ii in data[begin::step, 0]:
-        steps.append("%d" % ii)
-    with open(fname) as fp:
+        steps.append("%d" % ii)  # noqa: UP031
+    with open_file(fname) as fp:
         while True:
             line = fp.readline()
             if not line:
@@ -176,7 +187,7 @@ def load_energy(fname, begin=0, step=1):
 
 # def load_force(fname, natoms) :
 #     coords = []
-#     with open(fname) as fp:
+#     with open_file(fname) as fp:
 #         while True:
 #             blk = _load_pos_block(fp, natoms)
 #             # print(blk)
@@ -220,6 +231,29 @@ def to_system_data(input_name, prefix, begin=0, step=1):
             )
     except FileNotFoundError:
         data["cells"] = np.tile(cell, (data["coords"].shape[0], 1, 1))
+
+    # handle virial
+    stress_fname = prefix + ".str"
+    if os.path.exists(stress_fname):
+        # 1. Read stress tensor (in GPa) for each structure
+        stress, vsteps = load_data(stress_fname, 3, begin=begin, step=step, convert=1.0)
+        if csteps != vsteps:
+            csteps.append(None)
+            vsteps.append(None)
+            for int_id in range(len(csteps)):
+                if csteps[int_id] != vsteps[int_id]:
+                    break
+            step_id = begin + int_id * step
+            raise RuntimeError(
+                f"the step key between files are not consistent. "
+                f"The difference locates at step: {step_id}, "
+                f".pos is {csteps[int_id]}, .str is {vsteps[int_id]}"
+            )
+        # 2. Calculate volume from cell. revert unit to bohr before taking det
+        volumes = np.linalg.det(data["cells"] / length_convert).reshape(-1)
+        # 3. Calculate virials for each structure, shape [nf x 3 x 3]
+        data["virials"] = gpa2evperbohr * volumes[:, None, None] * stress
+
     return data, csteps
 
 

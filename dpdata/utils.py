@@ -1,9 +1,32 @@
+from __future__ import annotations
+
+import io
+import os
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Generator, Literal, overload
+
 import numpy as np
 
 from dpdata.periodic_table import Element
 
 
-def elements_index_map(elements, standard=False, inverse=False):
+@overload
+def elements_index_map(
+    elements: list[str], standard: bool, inverse: Literal[True]
+) -> dict[int, str]: ...
+@overload
+def elements_index_map(
+    elements: list[str], standard: bool, inverse: Literal[False] = ...
+) -> dict[str, int]: ...
+@overload
+def elements_index_map(
+    elements: list[str], standard: bool, inverse: bool = False
+) -> dict[str, int] | dict[int, str]: ...
+
+
+def elements_index_map(
+    elements: list[str], standard: bool = False, inverse: bool = False
+) -> dict:
     if standard:
         elements.sort(key=lambda x: Element(x).Z)
     if inverse:
@@ -104,3 +127,44 @@ def uniq_atom_names(data):
 def utf8len(s: str) -> int:
     """Return the byte length of a string."""
     return len(s.encode("utf-8"))
+
+
+if TYPE_CHECKING:
+    FileType = io.IOBase | str | os.PathLike
+
+
+@contextmanager
+def open_file(file: FileType, *args, **kwargs) -> Generator[io.IOBase, None, None]:
+    """A context manager that yields a file object.
+
+    Parameters
+    ----------
+    file : file object or file path
+        A file object or a file path.
+
+    Yields
+    ------
+    file : io.IOBase
+        A file object.
+    *args
+        parameters to open
+    **kwargs
+        other parameters
+
+    Raises
+    ------
+    ValueError
+        If file is not a file object or a file
+
+    Examples
+    --------
+    >>> with open_file("file.txt") as file:
+    ...     print(file.read())
+    """
+    if isinstance(file, io.IOBase):
+        yield file
+    elif isinstance(file, (str, os.PathLike)):
+        with open(file, *args, **kwargs) as f:
+            yield f
+    else:
+        raise ValueError("file must be a file object or a file path.")
