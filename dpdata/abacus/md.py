@@ -5,13 +5,15 @@ import warnings
 
 import numpy as np
 
+from dpdata.utils import open_file
+
 from .scf import (
     bohr2ang,
-    get_cell,
-    get_coords,
     get_geometry_in,
+    get_mag_force,
     kbar2evperang3,
 )
+from .stru import get_frame_from_stru
 
 # Read in geometries from an ABACUS MD trajectory.
 # The atomic coordinates are read in from generated files in OUT.XXXX.
@@ -53,9 +55,9 @@ def get_coords_from_dump(dumplines, natoms):
     if "VIRIAL" in dumplines[6]:
         calc_stress = True
         check_line = 10
-    assert (
-        "POSITION" in dumplines[check_line]
-    ), "keywords 'POSITION' cannot be found in the 6th line. Please check."
+    assert "POSITION" in dumplines[check_line], (
+        "keywords 'POSITION' cannot be found in the 6th line. Please check."
+    )
     if "FORCE" in dumplines[check_line]:
         calc_force = True
 
@@ -65,7 +67,7 @@ def get_coords_from_dump(dumplines, natoms):
     else:
         nframes_dump = int(nlines / (total_natoms + 9))
     assert nframes_dump > 0, (
-        "Number of lines in MD_dump file = %d. Number of atoms = %d. The MD_dump file is incomplete."
+        "Number of lines in MD_dump file = %d. Number of atoms = %d. The MD_dump file is incomplete."  # noqa: UP031
         % (nlines, total_natoms)
     )
     cells = np.zeros([nframes_dump, 3, 3])
@@ -122,7 +124,7 @@ def get_coords_from_dump(dumplines, natoms):
                     )
             iframe += 1
     assert iframe == nframes_dump, (
-        "iframe=%d, nframe_dump=%d. Number of frames does not match number of lines in MD_dump."
+        "iframe=%d, nframe_dump=%d. Number of frames does not match number of lines in MD_dump."  # noqa: UP031
         % (iframe, nframes_dump)
     )
     stresses *= kbar2evperang3
@@ -142,7 +144,7 @@ def get_energy(outlines, ndump, dump_freq):
                 energy.append(np.nan)
             nenergy += 1
     assert ndump == len(energy), (
-        "Number of total energies in running_md.log = %d. Number of frames in MD_dump = %d. Please check."
+        "Number of total energies in running_md.log = %d. Number of frames in MD_dump = %d. Please check."  # noqa: UP031
         % (len(energy), ndump)
     )
     energy = np.array(energy)
@@ -156,27 +158,27 @@ def get_frame(fname):
         path_in = os.path.join(fname, "INPUT")
     else:
         raise RuntimeError("invalid input")
-    with open(path_in) as fp:
+    with open_file(path_in) as fp:
         inlines = fp.read().split("\n")
     geometry_path_in = get_geometry_in(fname, inlines)  # base dir of STRU
     path_out = get_path_out(fname, inlines)
 
-    with open(geometry_path_in) as fp:
-        geometry_inlines = fp.read().split("\n")
-    celldm, cell = get_cell(geometry_inlines)
-    atom_names, natoms, types, coords = get_coords(
-        celldm, cell, geometry_inlines, inlines
-    )
+    data = get_frame_from_stru(geometry_path_in)
+    natoms = data["atom_numbs"]
+    # should remove spins from STRU file
+    if "spins" in data:
+        data.pop("spins")
+
     # This coords is not to be used.
     dump_freq = get_coord_dump_freq(inlines=inlines)
     # ndump = int(os.popen("ls -l %s | grep 'md_pos_' | wc -l" %path_out).readlines()[0])
     # number of dumped geometry files
     # coords = get_coords_from_cif(ndump, dump_freq, atom_names, natoms, types, path_out, cell)
-    with open(os.path.join(path_out, "MD_dump")) as fp:
+    with open_file(os.path.join(path_out, "MD_dump")) as fp:
         dumplines = fp.read().split("\n")
     coords, cells, force, stress = get_coords_from_dump(dumplines, natoms)
     ndump = np.shape(coords)[0]
-    with open(os.path.join(path_out, "running_md.log")) as fp:
+    with open_file(os.path.join(path_out, "running_md.log")) as fp:
         outlines = fp.read().split("\n")
     energy = get_energy(outlines, ndump, dump_freq)
 
@@ -188,7 +190,7 @@ def get_frame(fname):
             force = np.delete(force, i - ndump, axis=0)
             stress = np.delete(stress, i - ndump, axis=0)
             energy = np.delete(energy, i - ndump, axis=0)
-            unconv_stru += "%d " % i
+            unconv_stru += "%d " % i  # noqa: UP031
     ndump = len(energy)
     if unconv_stru != "":
         warnings.warn(f"Structure {unconv_stru} are unconverged and not collected!")
@@ -197,10 +199,9 @@ def get_frame(fname):
         stress[iframe] *= np.linalg.det(cells[iframe, :, :].reshape([3, 3]))
     if np.sum(np.abs(stress[0])) < 1e-10:
         stress = None
-    data = {}
-    data["atom_names"] = atom_names
-    data["atom_numbs"] = natoms
-    data["atom_types"] = types
+
+    magmom, magforce = get_mag_force(outlines)
+
     data["cells"] = cells
     # for idx in range(ndump):
     #    data['cells'][:, :, :] = cell
@@ -211,5 +212,13 @@ def get_frame(fname):
     if not isinstance(data["virials"], np.ndarray):
         del data["virials"]
     data["orig"] = np.zeros(3)
+    if len(magmom) > 0:
+        data["spins"] = magmom
+    if len(magforce) > 0:
+        data["force_mags"] = magforce
+
+    # need to expand the move.
+    if "move" in data:
+        data["move"] = [data["move"][0] for i in range(ndump)]
 
     return data

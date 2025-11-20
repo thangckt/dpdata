@@ -13,11 +13,6 @@ if TYPE_CHECKING:
     import ase
     from ase.optimize.optimize import Optimizer
 
-try:
-    from ase.io import Trajectory
-except ImportError:
-    pass
-
 
 @Format.register("ase/structure")
 class ASEStructureFormat(Format):
@@ -68,6 +63,8 @@ class ASEStructureFormat(Format):
         """Convert ase.Atoms to a LabeledSystem. Energies and forces
         are calculated by the calculator.
 
+        Note that this method will try to load virials from either virial field or converted from stress tensor.
+
         Parameters
         ----------
         atoms : ase.Atoms
@@ -99,13 +96,19 @@ class ASEStructureFormat(Format):
             "energies": np.array([energies]),
             "forces": np.array([forces]),
         }
-        try:
-            stress = atoms.get_stress(voigt=False)
-        except PropertyNotImplementedError:
-            pass
-        else:
-            virials = np.array([-atoms.get_volume() * stress])
-            info_dict["virials"] = virials
+
+        # try to get virials from different sources
+        virials = atoms.info.get("virial")
+        if virials is None:
+            try:
+                stress = atoms.get_stress(voigt=False)
+            except PropertyNotImplementedError:
+                pass
+            else:
+                virials = -atoms.get_volume() * stress
+        if virials is not None:
+            info_dict["virials"] = np.array([virials])
+
         return info_dict
 
     def from_multi_systems(
@@ -171,7 +174,6 @@ class ASEStructureFormat(Format):
 
         structures = []
         species = [data["atom_names"][tt] for tt in data["atom_types"]]
-
         for ii in range(data["coords"].shape[0]):
             structure = Atoms(
                 symbols=species,
@@ -180,13 +182,25 @@ class ASEStructureFormat(Format):
                 cell=data["cells"][ii],
             )
 
-            results = {"energy": data["energies"][ii], "forces": data["forces"][ii]}
+            results = {"energy": data["energies"][ii]}
+            if "forces" in data:
+                results["forces"] = data["forces"][ii]
             if "virials" in data:
                 # convert to GPa as this is ase convention
                 # v_pref = 1 * 1e4 / 1.602176621e6
                 vol = structure.get_volume()
                 # results['stress'] = data["virials"][ii] / (v_pref * vol)
-                results["stress"] = -data["virials"][ii] / vol
+                stress33 = -data["virials"][ii] / vol
+                results["stress"] = np.array(
+                    [
+                        stress33[0][0],
+                        stress33[1][1],
+                        stress33[2][2],
+                        stress33[1][2],
+                        stress33[0][2],
+                        stress33[0][1],
+                    ]
+                )
 
             structure.calc = SinglePointCalculator(structure, **results)
             structures.append(structure)
@@ -291,7 +305,10 @@ class ASETrajFormat(Format):
             dict_frames["energies"] = np.append(
                 dict_frames["energies"], tmp["energies"][0]
             )
-            dict_frames["forces"] = np.append(dict_frames["forces"], tmp["forces"][0])
+            if "forces" in tmp.keys() and "forces" in dict_frames.keys():
+                dict_frames["forces"] = np.append(
+                    dict_frames["forces"], tmp["forces"][0]
+                )
             if "virials" in tmp.keys() and "virials" in dict_frames.keys():
                 dict_frames["virials"] = np.append(
                     dict_frames["virials"], tmp["virials"][0]
@@ -300,7 +317,8 @@ class ASETrajFormat(Format):
         ## Correct the shape of numpy arrays
         dict_frames["cells"] = dict_frames["cells"].reshape(-1, 3, 3)
         dict_frames["coords"] = dict_frames["coords"].reshape(len(sub_traj), -1, 3)
-        dict_frames["forces"] = dict_frames["forces"].reshape(len(sub_traj), -1, 3)
+        if "forces" in dict_frames.keys():
+            dict_frames["forces"] = dict_frames["forces"].reshape(len(sub_traj), -1, 3)
         if "virials" in dict_frames.keys():
             dict_frames["virials"] = dict_frames["virials"].reshape(-1, 3, 3)
 
@@ -314,6 +332,8 @@ class ASETrajFormat(Format):
         file_name : str
             path to file
         """
+        from ase.io import Trajectory
+
         if os.path.isfile(file_name):
             os.remove(file_name)
 
@@ -333,6 +353,8 @@ class ASETrajFormat(Format):
         file_name : str
             path to file
         """
+        from ase.io import Trajectory
+
         if os.path.isfile(file_name):
             os.remove(file_name)
 

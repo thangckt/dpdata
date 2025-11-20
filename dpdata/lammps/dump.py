@@ -3,8 +3,14 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+from dpdata.utils import open_file
+
+if TYPE_CHECKING:
+    from dpdata.utils import FileType
 
 lib_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(lib_path)
@@ -169,11 +175,11 @@ def box2dumpbox(orig, box):
     return bounds, tilt
 
 
-def load_file(fname, begin=0, step=1):
+def load_file(fname: FileType, begin=0, step=1):
     lines = []
     buff = []
     cc = -1
-    with open(fname) as fp:
+    with open_file(fname) as fp:
         while True:
             line = fp.readline().rstrip("\n")
             if not line:
@@ -191,7 +197,91 @@ def load_file(fname, begin=0, step=1):
                 buff.append(line)
 
 
-def system_data(lines, type_map=None, type_idx_zero=True, unwrap=False):
+def get_spin_keys(inputfile):
+    """
+    Read input file and get the keys for spin info in dump.
+
+    Parameters
+    ----------
+    inputfile : str
+        Path to the input file.
+
+    Returns
+    -------
+    list or None
+        List of spin info keys if found, None otherwise.
+    """
+    if inputfile is None:
+        return None
+
+    if not os.path.isfile(inputfile):
+        warnings.warn(f"Input file {inputfile} not found.")
+        return None
+
+    with open(inputfile) as f:
+        for line in f.readlines():
+            ls = line.split()
+            if (
+                len(ls) > 7
+                and ls[0] == "compute"
+                and all(key in ls for key in ["sp", "spx", "spy", "spz"])
+            ):
+                compute_name = ls[1]
+                return [
+                    f"c_{compute_name}[{ls.index(key) - 3}]"
+                    for key in ["sp", "spx", "spy", "spz"]
+                ]
+
+    return None
+
+
+def get_spin(lines, spin_keys):
+    """
+    Get the spin info from the dump file.
+
+    Parameters
+    ----------
+    lines : list
+        The content of the dump file.
+    spin_keys : list
+        The keys for spin info in dump file.
+    the spin info is stored in sp, spx, spy, spz or spin_keys, which is the spin norm and the spin vector
+    1 1 0.00141160 5.64868599 0.01005602 1.54706291 0.00000000 0.00000000 1.00000000 -1.40772100 -2.03739417 -1522.64797384 -0.00397809 -0.00190426 -0.00743976
+    """
+    blk, head = _get_block(lines, "ATOMS")
+    heads = head.split()
+
+    if spin_keys is not None and all(i in heads for i in spin_keys):
+        key = spin_keys
+    else:
+        return None
+
+    try:
+        idx_id = heads.index("id") - 2
+        idx_sp, idx_spx, idx_spy, idx_spz = (heads.index(k) - 2 for k in key)
+
+        norm = []
+        vec = []
+        atom_ids = []
+        for line in blk:
+            words = line.split()
+            norm.append([float(words[idx_sp])])
+            vec.append(
+                [float(words[idx_spx]), float(words[idx_spy]), float(words[idx_spz])]
+            )
+            atom_ids.append(int(words[idx_id]))
+
+        spin = np.array(norm) * np.array(vec)
+        atom_ids, spin = zip(*sorted(zip(atom_ids, spin)))
+        return np.array(spin)
+    except (ValueError, IndexError) as e:
+        warnings.warn(f"Error processing spin data: {str(e)}")
+        return None
+
+
+def system_data(
+    lines, type_map=None, type_idx_zero=True, unwrap=False, input_file=None
+):
     array_lines = split_traj(lines)
     lines = array_lines[0]
     system = {}
@@ -199,7 +289,7 @@ def system_data(lines, type_map=None, type_idx_zero=True, unwrap=False):
     system["atom_names"] = []
     if type_map is None:
         for ii in range(len(system["atom_numbs"])):
-            system["atom_names"].append("TYPE_%d" % ii)
+            system["atom_names"].append("TYPE_%d" % ii)  # noqa: UP031
     else:
         assert len(type_map) >= len(system["atom_numbs"])
         for ii in range(len(system["atom_numbs"])):
@@ -210,6 +300,12 @@ def system_data(lines, type_map=None, type_idx_zero=True, unwrap=False):
     system["cells"] = [np.array(cell)]
     system["atom_types"] = get_atype(lines, type_idx_zero=type_idx_zero)
     system["coords"] = [safe_get_posi(lines, cell, np.array(orig), unwrap)]
+    spin_keys = get_spin_keys(input_file)
+    spin = get_spin(lines, spin_keys)
+    has_spin = False
+    if spin is not None:
+        system["spins"] = [spin]
+        has_spin = True
     for ii in range(1, len(array_lines)):
         bounds, tilt = get_dumpbox(array_lines[ii])
         orig, cell = dumpbox2box(bounds, tilt)
@@ -222,6 +318,18 @@ def system_data(lines, type_map=None, type_idx_zero=True, unwrap=False):
         system["coords"].append(
             safe_get_posi(array_lines[ii], cell, np.array(orig), unwrap)[idx]
         )
+        if has_spin:
+            spin = get_spin(array_lines[ii], spin_keys)
+            if spin is not None:
+                system["spins"].append(spin[idx])
+            else:
+                warnings.warn(
+                    f"Warning: spin info is not found in frame {ii}, remove spin info."
+                )
+                system.pop("spins")
+                has_spin = False
+    if has_spin:
+        system["spins"] = np.array(system["spins"])
     system["cells"] = np.array(system["cells"])
     system["coords"] = np.array(system["coords"])
     return system
@@ -245,6 +353,62 @@ def split_traj(dump_lines):
         #     assert(marks[ii+1] - marks[ii] == block_size)
         return ret
     return None
+
+
+def from_system_data(system, f_idx=0, timestep=0):
+    """Convert system data to LAMMPS dump format string.
+
+    Parameters
+    ----------
+    system : dict
+        System data dictionary containing atoms, coordinates, cell, etc.
+    f_idx : int, optional
+        Frame index to dump (default: 0)
+    timestep : int, optional
+        Timestep number for the dump (default: 0)
+
+    Returns
+    -------
+    str
+        LAMMPS dump format string
+    """
+    ret = ""
+
+    # Get basic system info
+    natoms = sum(system["atom_numbs"])
+    coords = system["coords"][f_idx]
+    cell = system["cells"][f_idx]
+    atom_types = system["atom_types"]
+    orig = system.get("orig", np.zeros(3))
+
+    # Convert cell to dump format (bounds and tilt)
+    bounds, tilt = box2dumpbox(orig, cell)
+
+    # Write timestep
+    ret += "ITEM: TIMESTEP\n"
+    ret += f"{timestep}\n"
+
+    # Write number of atoms
+    ret += "ITEM: NUMBER OF ATOMS\n"
+    ret += f"{natoms}\n"
+
+    # Write box bounds
+    ret += "ITEM: BOX BOUNDS xy xz yz pp pp pp\n"
+    ret += f"{bounds[0][0]:.10f} {bounds[0][1]:.10f} {tilt[0]:.10f}\n"
+    ret += f"{bounds[1][0]:.10f} {bounds[1][1]:.10f} {tilt[1]:.10f}\n"
+    ret += f"{bounds[2][0]:.10f} {bounds[2][1]:.10f} {tilt[2]:.10f}\n"
+
+    # Write atoms header
+    ret += "ITEM: ATOMS id type x y z\n"
+
+    # Write atom data
+    for ii in range(natoms):
+        atom_id = ii + 1  # LAMMPS uses 1-based indexing
+        atom_type = atom_types[ii] + 1  # LAMMPS uses 1-based type indexing
+        x, y, z = coords[ii]
+        ret += f"{atom_id} {atom_type} {x:.10f} {y:.10f} {z:.10f}\n"
+
+    return ret
 
 
 if __name__ == "__main__":

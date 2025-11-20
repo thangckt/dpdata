@@ -8,6 +8,7 @@ import dpdata.amber.md
 import dpdata.amber.sqm
 from dpdata.driver import Driver, Minimizer
 from dpdata.format import Format
+from dpdata.utils import open_file
 
 
 @Format.register("amber/md")
@@ -135,15 +136,15 @@ class SQMDriver(Driver):
         labeled_system = dpdata.LabeledSystem()
         with tempfile.TemporaryDirectory() as d:
             for ii, ss in enumerate(ori_system):
-                inp_fn = os.path.join(d, "%d.in" % ii)
-                out_fn = os.path.join(d, "%d.out" % ii)
+                inp_fn = os.path.join(d, "%d.in" % ii)  # noqa: UP031
+                out_fn = os.path.join(d, "%d.out" % ii)  # noqa: UP031
                 ss.to("sqm/in", inp_fn, **self.kwargs)
                 try:
                     sp.check_output(
                         [*self.sqm_exec.split(), "-O", "-i", inp_fn, "-o", out_fn]
                     )
                 except sp.CalledProcessError as e:
-                    with open(out_fn) as f:
+                    with open_file(out_fn) as f:
                         raise RuntimeError(
                             "Run sqm failed! Output:\n" + f.read()
                         ) from e
